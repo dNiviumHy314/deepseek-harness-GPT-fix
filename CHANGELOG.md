@@ -14,3 +14,4 @@
 - Added a workflow allowlist to `tools/check-public-tree.py` so unexpected files under `.github/workflows/` fail validation.
 - Updated the two stale Bash escalation tests to assert that blank or whitespace-only injected justifications are ignored and execute under the standing sandbox policy; focused suite remains 293/293 passing.
 - Pushed commit `1e8978cc37` from `public-gpt-fix` to the public Fork using Git Bash; push and pull-request focused workflows passed. The inherited `weighted-approval` check remains pending separately.
+- Fixed the default-branch upstream compatibility workflow to create the pnpm store before setup-node cache initialization, preventing false failures during no-upstream-change runs.
