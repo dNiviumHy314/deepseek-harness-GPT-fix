@@ -2,6 +2,7 @@
 
 ## 2026-09-24
 
+- Fixed GitHub Actions dependency setup by installing pnpm before setup-node cache initialization.
 - Ported the permission/escalation fix onto the clean official upstream baseline without cherry-picking unrelated private history.
 - Hid premature escalation fields from Bash, PowerShell, filesystem, and `run_code` schemas while preserving denial-driven, approval-gated retries.
 - Added focused regression coverage; 4 test files and 293 tests pass, and `pnpm run typecheck` passes.
