@@ -13,7 +13,8 @@ if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
   exit 2
 fi
 
-if [[ "$(git rev-parse --show-toplevel)" != "$ROOT" ]]; then
+repo_root="$(cd -- "$(git rev-parse --show-toplevel)" && pwd -P)"
+if [[ "$repo_root" != "$ROOT" ]]; then
   echo "fixed-update: repository root mismatch: expected $ROOT" >&2
   exit 2
 fi
