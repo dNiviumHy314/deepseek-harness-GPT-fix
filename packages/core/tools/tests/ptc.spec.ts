@@ -2210,12 +2210,12 @@ describe('per-program execution controls', () => {
     return { ...state, agent, session, execute }
   }
 
-  it('advertises configured timeout values and one-execution scope only when supported', async () => {
+  it('advertises configured timeout values while keeping escalation fields retry-only', async () => {
     const { ctx, tools } = await controlledSetup()
     try {
       const schema = tools.schemas().find(tool => tool.name === RUN_CODE_NAME)!
       expect(JSON.stringify(schema.parameters)).toContain('Default 120000; capped at 600000')
-      expect(JSON.stringify(schema.parameters)).toContain('sandbox_permissions')
+      expect(JSON.stringify(schema.parameters)).not.toContain('sandbox_permissions')
       expect(schema.description).toContain('Nested tools retain their own policies')
       expect(schema.description).toContain('Programs start with an empty environment.')
       expect(schema.description).toContain("The working directory is the Session's current directory.")
@@ -2271,14 +2271,14 @@ describe('per-program execution controls', () => {
     { justification: 'Need writes' },
     { sandbox_permissions: 'workspace-write', justification: ' ' },
     { sandbox_permissions: 'read-only', justification: 'No widening' },
-  ])('rejects invalid escalation pairing or mode: %j', async (args) => {
+  ])('ignores malformed or non-widening escalation input: %j', async (args) => {
     const { ctx, runtime, execute } = await controlledSetup()
     const ask = vi.fn(() => Promise.resolve<ApprovalOutcome>('allowed-once'))
     ctx.on('approval/request', ask)
     try {
-      expect((await execute(args)).isError).toBe(true)
+      expect((await execute(args)).isError).toBe(false)
       expect(ask).not.toHaveBeenCalled()
-      expect(runtime.lastRequest).toBeUndefined()
+      expect(runtime.lastRequest).not.toBeUndefined()
     } finally { await ctx.fiber.dispose() }
   })
 

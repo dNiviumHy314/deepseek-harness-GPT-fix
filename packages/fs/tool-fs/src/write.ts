@@ -43,8 +43,7 @@ ${verb} file
 
 /**
  * The `write` tool's validated arguments: the base parameters plus the
- * two escalation fields, advertised only under a confining `ctx.fs` (absent
- * from the schema otherwise, so the validator rejects them before `execute`).
+ * two escalation fields, accepted at runtime only for a denial-driven retry; the initial schema does not advertise them.
  */
 interface WriteToolArgs {
   file_path: string
@@ -56,7 +55,7 @@ interface WriteToolArgs {
 /**
  * Register the `write` tool and its scope-aware system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
- * @param sandbox - the shared sandbox-escalation API (advertisement, mode stamping, denial mapping).
+ * @param sandbox - the shared sandbox-escalation API (runtime validation, mode stamping, denial mapping).
  */
 export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void {
   ctx.systemPrompt.section({
@@ -75,7 +74,6 @@ export function applyWriteTool(ctx: Context, sandbox: FsSandboxController): void
     parameters: {
       file_path: { type: 'string', required: true, description: 'Path to write, resolved by the filesystem backend.' },
       content: { type: 'string', required: true, description: 'Full UTF-8 text content to write.' },
-      ...sandbox.escalationModes.length > 0 ? sandbox.schemaFields() : {},
     },
     output: {
       schema: {

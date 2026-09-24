@@ -1,0 +1,44 @@
+name: Public hygiene and focused tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Reject personal data and credentials
+        run: python tools/check-public-tree.py
+
+      - name: Run focused permission tests
+        run: >-
+          pnpm exec vitest run
+          packages/core/tools/tests/ptc.spec.ts
+          packages/sandbox/sandbox/tests/escalation.spec.ts
+          packages/shell/tool-bash/tests/tools.spec.ts
+          packages/shell/tool-pwsh/tests/tools.spec.ts
+          packages/fs/tool-fs/tests/tools.spec.ts
+          --reporter=dot

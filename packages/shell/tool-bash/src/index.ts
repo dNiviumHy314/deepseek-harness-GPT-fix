@@ -70,7 +70,7 @@ interface BashToolArgs {
   justification?: string
 }
 
-function validateBashArgs(args: BashToolArgs, effectiveMode: SandboxMode | undefined): void {
+function validateBashArgs(args: BashToolArgs): { sandboxPermissions: string; justification: string } | undefined {
   if (args.command.trim().length === 0) {
     throw new Error('invalid command: expected a non-empty string')
   }
@@ -80,16 +80,13 @@ function validateBashArgs(args: BashToolArgs, effectiveMode: SandboxMode | undef
   if (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) {
     throw new Error(`invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`)
   }
-  if (args.sandbox_permissions !== undefined && args.sandbox_permissions === effectiveMode) return
-  const justification = args.sandbox_permissions === undefined && args.justification?.trim() === ''
-    ? undefined
-    : args.justification
-  validateEscalationArgs(args.sandbox_permissions, justification)
+  if (!validateEscalationArgs(args.sandbox_permissions, args.justification)) return undefined
+  if (typeof args.sandbox_permissions !== 'string' || typeof args.justification !== 'string') return undefined
+  return { sandboxPermissions: args.sandbox_permissions, justification: args.justification }
 }
 
 function bashDescription(
   backgroundEnabled: boolean,
-  escalationModes: readonly SandboxMode[],
   promoteOnTimeout: boolean,
 ): string {
   const background = backgroundEnabled
@@ -105,18 +102,7 @@ function bashDescription(
     + 'Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. '
     + 'Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. '
     + background
-  if (escalationModes.length === 0) return base
-  return base + ' Attempting a command the sandbox may deny is safe and expected: run it and read the '
-    + 'marker rather than assuming the denial. When a command is denied and a wider mode would let it '
-    + 'succeed, escalate immediately in the same turn — the one sanctioned exception to a denial: retry '
-    + 'the exact same command once with `sandbox_permissions` (the narrowest wider mode that suffices) '
-    + 'plus a one-sentence `justification`. Do not detour through chat to ask permission first — the '
-    + 'approval prompt raised by that retry is how the user consents. If the session states approval '
-    + 'prompts are disabled, there is no exception: a denial is final — do not set `sandbox_permissions`. '
-    + 'Never escalate speculatively: ground the request in a real denial — normally the one this command '
-    + 'just hit; escalating up front is fine only when this session already denied the same access. '
-    + 'A rejected escalation is final for that command — stop and explain, never work around '
-    + 'it — but it does not forbid attempting or escalating other commands later.'
+  return base
 }
 
 /**
@@ -249,18 +235,17 @@ export function apply(ctx: Context, config: Config = {}): void {
    * anything executes, delegating the shared fail-closed sequence (strict
    * widening, channel resolution, outcome mapping) to
    * {@link approveEscalation}. This tool contributes only the composition
-   * guard (the fields are unadvertised without a sandboxing executor, yet
-   * schema validation checks advertised keys only, so an unadvertised
-   * `sandbox_permissions` still reaches execute) and the approval
+   * guard (the fields are omitted from the initial schema, while runtime
+   * validation still accepts a denial-driven retry) and the approval
    * ingredients. The shared policy resolver is required whenever the executor
-   * advertises confinement, so a split composition fails at tool-plugin load.
+   * has confinement, so a split composition fails at tool-plugin load.
    */
   const approveBashEscalation = (
     mode: string,
     justification: string,
     exec: ToolExecution,
     standingPolicy: SandboxExecutionPolicy | undefined,
-  ): Promise<SandboxMode> => {
+  ): Promise<SandboxMode | undefined> => {
     if (escalationModes.length === 0) {
       throw new Error('sandbox_permissions is not available in this composition (no sandboxing executor to escalate)')
     }
@@ -394,7 +379,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     return defineTool({
       name: 'bash',
-      description: bashDescription(background, escalationModes, promote),
+      description: bashDescription(background, promote),
       parameters: {
         command: { type: 'string', required: true, description: 'The bash command to execute.' },
         description: {
@@ -413,17 +398,6 @@ export function apply(ctx: Context, config: Config = {}): void {
         workdir: { type: 'string', description: 'Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.' },
         ...background ? {
           run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.' },
-        } : {},
-        ...escalationModes.length > 0 ? {
-          sandbox_permissions: {
-            type: 'string' as const,
-            enum: [...escalationModes],
-            description: 'The wider sandbox mode this command needs. Only valid as a one-shot retry of a command the sandbox just denied; requires justification and user approval.',
-          },
-          justification: {
-            type: 'string' as const,
-            description: 'Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access.',
-          },
         } : {},
       },
       output: {
@@ -501,10 +475,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       async execute(args: BashToolArgs, exec) {
         // Description is display metadata; workdir defaults to the caller's session.
         const standingPolicy = resolveSandboxPolicy(exec)
-        validateBashArgs(args, standingPolicy?.mode)
-        const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
-          ? await approveBashEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
-          : undefined
+        const escalation = validateBashArgs(args)
+        const approvedMode = escalation === undefined
+          ? undefined
+          : await approveBashEscalation(escalation.sandboxPermissions, escalation.justification, exec, standingPolicy)
         const policy = approvedMode === undefined
           ? standingPolicy
           : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
