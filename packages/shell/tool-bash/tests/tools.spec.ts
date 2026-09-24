@@ -727,15 +727,15 @@ describe('sandbox escalation through the generic task producer', () => {
     }
   })
 
-  it.each(['', ' \t\n'])('rejects an explicit mode with blank justification %j before execution', async (justification) => {
+  it.each(['', ' \t\n'])('ignores an explicit mode with blank justification %j before execution', async (justification) => {
     const { ctx, bash } = await setupSandboxed(true)
     try {
       const prompted = vi.fn()
       ctx.on('approval/request', () => { prompted(); return Promise.resolve<ApprovalOutcome>('allowed-once') })
       const result = await call(ctx, 'bash', { ...escalate, justification }, sandboxAgent())
-      expect(text(result)).toContain('invalid justification: expected a non-empty sentence')
-      expect(result.isError).toBe(true)
-      expect(bash.modes).toEqual([])
+      expect(result.isError, text(result)).toBe(false)
+      expect(text(result)).toBe('ok')
+      expect(bash.modes).toEqual(['read-only'])
       expect(prompted).not.toHaveBeenCalled()
     } finally {
       await ctx.fiber.dispose()

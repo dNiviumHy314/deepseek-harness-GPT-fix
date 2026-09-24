@@ -12,3 +12,4 @@
 - Made the bilingual disclaimer explicit that this AI-maintained personal fork provides no warranty and accepts no responsibility for consequences of use.
 - Moved all inherited release, E2E/API, deployment, publication, Issue-automation, and other secret-using workflows under `.github/workflows-disabled/`; only public hygiene and upstream compatibility workflows remain active.
 - Added a workflow allowlist to `tools/check-public-tree.py` so unexpected files under `.github/workflows/` fail validation.
+- Updated the two stale Bash escalation tests to assert that blank or whitespace-only injected justifications are ignored and execute under the standing sandbox policy; focused suite remains 293/293 passing.
