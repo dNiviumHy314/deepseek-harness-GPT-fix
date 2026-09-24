@@ -46,6 +46,8 @@ tools\dsh-git-bash.cmd web
 
 这些启动器不会替换或修改系统默认 PowerShell，只是为容易受到 Bash 转义影响的命令提供一条显式 Git Bash 路径。
 
+启动前，tools/dsh-git-bash.sh 会检查公开的修复 Fork（dNiviumHy314/deepseek-harness-GPT-fix），只有工作树干净且历史可以安全快进时才更新本地源码。它不会把官方上游当成本地更新源。只有在明确测试其他公开分支时，才设置 DSH_FIXED_REPOSITORY_URL 或 DSH_FIXED_REPOSITORY_REF；如果本地有改动或历史分叉，脚本会拒绝覆盖。
+
 ## 上游同步
 
 上游兼容性 Workflow 每小时检查官方 `master` 分支，也可以手动运行。上游发生变化时，它会把本地修复应用到临时的上游候选树，运行公开仓库卫生检查和沙箱专项测试；如果有冲突，Workflow 失败并上传结果，而不是静默覆盖本地修复。

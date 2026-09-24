@@ -2,6 +2,8 @@
 
 ## 2026-09-24
 
+- Added a launch-time updater that fast-forwards the local Git Bash source only from the personal public Fork; it refuses dirty or divergent worktrees and never replaces the official upstream monitor.
+
 - Fixed GitHub Actions dependency setup by installing pnpm before setup-node cache initialization.
 - Ported the permission/escalation fix onto the clean official upstream baseline without cherry-picking unrelated private history.
 - Hid premature escalation fields from Bash, PowerShell, filesystem, and `run_code` schemas while preserving denial-driven, approval-gated retries.

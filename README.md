@@ -46,6 +46,8 @@ tools\dsh-git-bash.cmd web
 
 These launchers do not replace or modify the system default PowerShell. They only provide an explicit Git Bash path for commands whose quoting is easier in Bash.
 
+Before launching, tools/dsh-git-bash.sh checks the public fixed fork (dNiviumHy314/deepseek-harness-GPT-fix) and fast-forwards only when the worktree is clean and the histories are compatible. It never uses the official upstream as the local update source. Set DSH_FIXED_REPOSITORY_URL or DSH_FIXED_REPOSITORY_REF only when intentionally testing another public branch; divergent or locally modified worktrees are refused.
+
 ## Upstream synchronization
 
 The upstream compatibility workflow checks the official `master` branch hourly and can also be started manually. It applies the local patch to a temporary upstream candidate, runs the public-hygiene check and focused sandbox tests, and uploads a patch artifact when upstream changes.
