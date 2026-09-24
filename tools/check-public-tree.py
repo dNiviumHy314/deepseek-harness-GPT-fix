@@ -22,6 +22,7 @@ FORBIDDEN_SUFFIXES = {
     ".sqlite", ".sqlite-shm", ".sqlite-wal", ".db", ".db-shm", ".db-wal",
 }
 FORBIDDEN_NAMES = {".env", "credentials.json", "secrets.json"}
+ACTIVE_WORKFLOWS = {"public-hygiene.yml", "sync-upstream.yml"}
 SECRET_PATTERNS = (
     ("private-key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
     ("github-token", re.compile(r"\b(?:ghp|gho|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\b")),
@@ -44,6 +45,12 @@ def tracked_paths() -> list[Path]:
 
 def path_violation(path: Path) -> str | None:
     relative = path.relative_to(ROOT)
+    if (
+        len(relative.parts) >= 3
+        and relative.parts[:2] == (".github", "workflows")
+        and (len(relative.parts) != 3 or relative.name not in ACTIVE_WORKFLOWS)
+    ):
+        return "only allowlisted workflows may stay in .github/workflows"
     parts = {part.lower() for part in relative.parts}
     name = relative.name.lower()
     synthetic_fixture = 'snapshots' in parts or ('tests' in parts and 'fixtures' in parts)

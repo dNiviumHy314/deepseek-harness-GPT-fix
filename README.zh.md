@@ -58,7 +58,9 @@ tools\dsh-git-bash.cmd web
 bash tools/sync-upstream.sh
 ```
 
-GitHub 自己的手机通知或邮件通知可以报告 Workflow 失败。不要把微软、Google、QQ、SMTP 凭据、GitHub Token 或任何其他个人密钥放进仓库；通知应该在 GitHub 账户或仓库设置中配置。
+`.github/workflows/` 中只有 `public-hygiene.yml` 和 `sync-upstream.yml` 处于启用状态。上游的发布、E2E/API、部署、出版、Issue 自动化以及其他会使用 Secret 的 Workflow 被保存在 `.github/workflows-disabled/` 中，GitHub Actions 不会发现或运行它们。本 Fork 不配置这些 Secret。
+
+GitHub 自己的手机通知或邮件通知可以报告这两个活动 Workflow 的失败。不要把微软、Google、QQ、SMTP 凭据、GitHub Token 或任何其他个人密钥放进仓库；通知应该在 GitHub 账户或仓库设置中配置。
 
 ## 开发检查
 

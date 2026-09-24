@@ -58,7 +58,9 @@ For a local compatibility check, run from the public fix branch:
 bash tools/sync-upstream.sh
 ```
 
-GitHub's own mobile/email notifications can report workflow failures. Do not put Microsoft, Google, QQ, SMTP credentials, GitHub tokens, or any other personal secret in this repository. Configure notifications in the GitHub account or repository settings instead.
+Only `public-hygiene.yml` and `sync-upstream.yml` are active in `.github/workflows/`. The upstream release, E2E/API, deployment, publication, Issue-automation, and other secret-using workflow files are preserved under `.github/workflows-disabled/` and are not discovered by GitHub Actions. This fork does not configure their secrets.
+
+GitHub's own mobile/email notifications can report the two active workflow failures. Do not put Microsoft, Google, QQ, SMTP credentials, GitHub tokens, or any other personal secret in this repository. Configure notifications in the GitHub account or repository settings instead.
 
 ## Development checks
 

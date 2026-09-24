@@ -9,3 +9,5 @@
 - No remote visibility change, push, force-push, deletion, or credential access was performed.
 - Moved candidate dependency installation after the upstream patch is applied so compatibility tests use the candidate lockfile and source tree.
 - Made the bilingual disclaimer explicit that this AI-maintained personal fork provides no warranty and accepts no responsibility for consequences of use.
+- Moved all inherited release, E2E/API, deployment, publication, Issue-automation, and other secret-using workflows under `.github/workflows-disabled/`; only public hygiene and upstream compatibility workflows remain active.
+- Added a workflow allowlist to `tools/check-public-tree.py` so unexpected files under `.github/workflows/` fail validation.
