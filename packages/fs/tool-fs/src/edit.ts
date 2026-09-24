@@ -24,8 +24,8 @@ interface EditInput {
 
 /**
  * The `edit` tool's validated arguments: the base parameters plus the two
- * escalation fields, advertised only under a confining `ctx.fs` (absent from
- * the schema otherwise, so the validator rejects them before `execute`).
+ * escalation fields. They are accepted at runtime for a denial-driven retry;
+ * the initial schema intentionally does not advertise them.
  */
 interface EditToolArgs {
   file_path: string
@@ -70,7 +70,7 @@ export function formatEditOutput(displayPath: string, replaceAll: boolean): stri
 /**
  * Register the `edit` tool and its scope-aware system-prompt guidance.
  * @param ctx - the plugin context; registrations are effects scoped to it, and execution uses its `fs` service.
- * @param sandbox - the shared sandbox-escalation API (advertisement, mode stamping, denial mapping).
+ * @param sandbox - the shared sandbox-escalation API (runtime validation, mode stamping, denial mapping).
  */
 export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void {
   ctx.systemPrompt.section({
@@ -89,7 +89,6 @@ export function applyEditTool(ctx: Context, sandbox: FsSandboxController): void 
       old_string: { type: 'string', required: true, description: 'Literal text to replace. Must match exactly.' },
       new_string: { type: 'string', required: true, description: 'Literal replacement text. Use an empty string to delete the match.' },
       replace_all: { type: 'boolean', description: 'Replace all matches. Defaults to false; when false, old_string must appear exactly once.' },
-      ...sandbox.escalationModes.length > 0 ? sandbox.schemaFields() : {},
     },
     output: {
       schema: {

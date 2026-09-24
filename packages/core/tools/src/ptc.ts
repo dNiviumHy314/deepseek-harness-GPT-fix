@@ -17,7 +17,7 @@ declare module '@deepseek-ai/dsh-llm' {
 
 import type { ContentBlock, ToolCallId, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { PtcBindingFunction, PtcRunResult, PtcRunSandbox, PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
-import { approveEscalation, ESCALATION_TARGETS, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type { ApprovalService } from '@deepseek-ai/dsh-user-approval'
 import { deepFreeze, snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -107,21 +107,22 @@ const RUN_CODE_DESCRIPTION_PARAM_DESCRIPTION
 
 const RUN_CODE_CONTROLS = {
   timeoutMs: { type: 'number', description: 'Positive elapsed-time budget in milliseconds, capped by the deployment maximum.' },
-  sandbox_permissions: { type: 'string', enum: [...ESCALATION_TARGETS], description: 'Wider sandbox mode for this complete program execution; requires justification and approval.' },
-  justification: { type: 'string', description: 'Reason this complete program needs wider access, shown to the user for approval.' },
 } as const
 
+interface RuntimeEscalationArgs {
+  sandbox_permissions?: unknown
+  justification?: unknown
+}
+
 function controlParameters(runtime: PtcRuntime | undefined) {
-  // Catalog readers have no mounted runtime; real model assembly requires one.
-  if (runtime === undefined) return RUN_CODE_CONTROLS
+  // The escalation pair remains runtime-valid input, but it is deliberately
+  // omitted from the model-facing schema until a denial supplies the retry
+  // instruction. Catalog readers and mounted runtimes use the same surface.
+  const timeout = runtime?.timeout
   return {
-    ...runtime.timeout === undefined ? {} : {
+    ...timeout === undefined ? {} : {
       timeoutMs: { ...RUN_CODE_CONTROLS.timeoutMs,
-        description: `Positive elapsed-time budget in milliseconds, including nested tool and approval waits. Default ${runtime.timeout.defaultMs}; capped at ${runtime.timeout.maxMs}. Zero does not disable the deadline.` },
-    },
-    ...runtime.sandboxMode === undefined ? {} : {
-      sandbox_permissions: RUN_CODE_CONTROLS.sandbox_permissions,
-      justification: RUN_CODE_CONTROLS.justification,
+        description: `Positive elapsed-time budget in milliseconds, including nested tool and approval waits. Default ${timeout.defaultMs}; capped at ${timeout.maxMs}. Zero does not disable the deadline.` },
     },
   }
 }
@@ -381,7 +382,8 @@ export function createRunCodeTool(registry: ToolRuntime, options: RunCodeBridgeO
         throw new Error('invalid description: expected a non-empty string')
       }
       const runtime = requireRuntime()
-      validateEscalationArgs(args.sandbox_permissions, args.justification)
+      const escalationArgs = args as typeof args & RuntimeEscalationArgs
+      const hasUsableEscalation = validateEscalationArgs(escalationArgs.sandbox_permissions, escalationArgs.justification)
       if (args.timeoutMs !== undefined && runtime.timeout === undefined) {
         throw new Error('timeoutMs is not available for this PTC runtime')
       }
@@ -390,18 +392,18 @@ export function createRunCodeTool(registry: ToolRuntime, options: RunCodeBridgeO
       }
       const standingPolicy = runtime.sandboxMode === undefined ? undefined : options.resolveSandboxPolicy(exec)
       let policy = standingPolicy
-      if (args.sandbox_permissions !== undefined && args.justification !== undefined) {
+      if (hasUsableEscalation) {
         if (standingPolicy === undefined) throw new Error('sandbox_permissions is not available for this PTC runtime')
         const approvedMode = await approveEscalation({
-          requestedMode: args.sandbox_permissions,
-          justification: args.justification,
+          requestedMode: escalationArgs.sandbox_permissions,
+          justification: escalationArgs.justification,
           effectiveMode: standingPolicy.mode,
           subject: 'program',
         }, {
           approver: options.peekApprover(), agent: exec.agent, callId: exec.callId,
           toolName: RUN_CODE_NAME, signal: exec.signal,
         })
-        policy = { ...standingPolicy, mode: approvedMode }
+        policy = approvedMode === undefined ? standingPolicy : { ...standingPolicy, mode: approvedMode }
       }
       exec.signal.throwIfAborted()
 

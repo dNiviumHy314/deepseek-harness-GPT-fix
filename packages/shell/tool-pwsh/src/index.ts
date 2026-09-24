@@ -103,7 +103,7 @@ interface PwshForegroundResult {
 }
 
 /* jscpd:ignore-start -- minimal mirror of dsh-tool-bash's validation and execute plumbing (Agent Note). */
-function validatePwshArgs(args: PwshToolArgs): void {
+function validatePwshArgs(args: PwshToolArgs): { sandboxPermissions: string; justification: string } | undefined {
   if (args.command.trim().length === 0) {
     throw new Error('invalid command: expected a non-empty string')
   }
@@ -113,16 +113,16 @@ function validatePwshArgs(args: PwshToolArgs): void {
   if (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) {
     throw new Error(`invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`)
   }
-  // The escalation pairing (sandbox_permissions ⇔ justification, non-empty) is
-  // the shared rule both enforcing families validate identically.
-  validateEscalationArgs(args.sandbox_permissions, args.justification)
+  if (!validateEscalationArgs(args.sandbox_permissions, args.justification)) return undefined
+  if (typeof args.sandbox_permissions !== 'string' || typeof args.justification !== 'string') return undefined
+  return { sandboxPermissions: args.sandbox_permissions, justification: args.justification }
 }
 /* jscpd:ignore-end */
 
 function pwshDescription(
   backgroundEnabled: boolean,
-  escalationModes: readonly SandboxMode[],
   promoteOnTimeout: boolean,
+  confined: boolean,
 ): string {
   const background = backgroundEnabled
     ? 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; read its output with `job_output` and stop it with `job_kill`.'
@@ -139,34 +139,16 @@ function pwshDescription(
     + 'Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. '
     + 'On Windows a force-killed command settles as `[exit code: 1]` without a signal marker — treat it as an interruption, not a command failure. '
     + background
-  if (escalationModes.length === 0) return base
-  // The language-mode and named-pipe contracts below are Windows-restricted-token
-  // behavior, but the gate is 'any confining executor is mounted'
-  // (escalationModes non-empty). Every shipped composition pairing tool-pwsh
-  // with a confining executor is win32-only, so the gate is equivalent. A POSIX
-  // pwsh-sandbox composition must gate both sentences on the platform instead
-  // (tracked in the pwsh-tool-and-executor Agent Note).
+  if (!confined) return base
   return base + ' Under the Windows sandbox, read-only pwsh runs in PowerShell ConstrainedLanguage mode, while '
-    + 'workspace-write stays in FullLanguage unless host policy says otherwise. In read-only, prefer cmdlets and core types (`[string]`, `[datetime]`, `[regex]`, `[guid]`); '
-    + '.NET static calls (`[System.IO.*]::`, `[math]::`), `Add-Type`, COM objects, and reflection fail '
-    + 'with "only core types" errors. `-f` formatting, property access, and core cmdlets work. '
-    + 'In both confined modes, programs cannot open named pipes, so a command that captures another '
-    + 'program\'s output through piped stdio (Node.js `child_process.spawn`/`exec` with the default '
-    + '`stdio: \'pipe\'`) fails with EPERM, while `stdio: \'inherit\'` and `stdio: \'ignore\'` spawns '
-    + 'work and PowerShell\'s own pipelines are unaffected. That EPERM is the documented boundary: '
-    + 'do not retry the command another way — escalate the exact command once or restructure it to '
-    + 'avoid capturing output. '
-    + 'Attempting a command the sandbox may deny is safe and expected: run it and read the '
-    + 'marker rather than assuming the denial. When a command is denied and a wider mode would let it '
-    + 'succeed, escalate immediately in the same turn — the one sanctioned exception to a denial: retry '
-    + 'the exact same command once with `sandbox_permissions` (the narrowest wider mode that suffices) '
-    + 'plus a one-sentence `justification`. Do not detour through chat to ask permission first — the '
-    + 'approval prompt raised by that retry is how the user consents. If the session states approval '
-    + 'prompts are disabled, there is no exception: a denial is final — do not set `sandbox_permissions`. '
-    + 'Never escalate speculatively: ground the request in a real denial — normally the one this command '
-    + 'just hit; escalating up front is fine only when this session already denied the same access. '
-    + 'A rejected escalation is final for that command — stop and explain, never work around '
-    + 'it — but it does not forbid attempting or escalating other commands later.'
+    + 'workspace-write stays in FullLanguage unless host policy says otherwise. In read-only, prefer cmdlets and core '
+    + 'types (`[string]`, `[datetime]`, `[regex]`, `[guid]`); .NET static calls (`[System.IO.*]::`, `[math]::`), '
+    + 'Add-Type, COM objects, and reflection fail with "only core types" errors. `-f` formatting, property access, '
+    + 'and core cmdlets work. In both confined modes, programs cannot open named pipes, so a command that captures '
+    + "another program\'s output through piped stdio (Node.js `child_process.spawn`/`exec` with the default "
+    + "`stdio: 'pipe'`) fails with EPERM, while `stdio: 'inherit'` and `stdio: 'ignore'` spawns work and "
+    + "PowerShell's own pipelines are unaffected. That EPERM is the documented boundary: do not retry the command "
+    + 'another way — use the denial result to decide whether the exact command needs a one-shot wider retry.'
 }
 
 /**
@@ -254,19 +236,18 @@ export function apply(ctx: Context, config: Config = {}): void {
    * anything executes, delegating the shared fail-closed sequence (strict
    * widening, channel resolution, outcome mapping) to
    * {@link approveEscalation}. This tool contributes only the composition
-   * guard (the fields are unadvertised without a sandboxing executor, yet
-   * schema validation checks advertised keys only, so an unadvertised
-   * `sandbox_permissions` still reaches execute) and the approval
+   * guard (the fields are omitted from the initial schema, while runtime
+   * validation still accepts a denial-driven retry) and the approval
    * ingredients. The shared policy resolver is required whenever the
-   * executor advertises confinement, so a split composition fails at
-   * tool-plugin load.
+   * executor has confinement, so a split composition fails at tool-plugin
+   * load.
    */
   const approvePwshEscalation = (
     mode: string,
     justification: string,
     exec: ToolExecution,
     standingPolicy: SandboxExecutionPolicy | undefined,
-  ): Promise<SandboxMode> => {
+  ): Promise<SandboxMode | undefined> => {
     if (escalationModes.length === 0) {
       throw new Error('sandbox_permissions is not available in this composition (no sandboxing executor to escalate)')
     }
@@ -403,7 +384,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     /* jscpd:ignore-end */
     return defineTool({
       name: 'pwsh',
-      description: pwshDescription(background, escalationModes, promote),
+      description: pwshDescription(background, promote, defaultMode !== undefined),
       /* jscpd:ignore-start -- deliberate mirror of dsh-tool-bash's parameter surface (pwsh-tool-and-executor Agent Note). */
       parameters: {
         command: { type: 'string', required: true, description: 'The PowerShell command to execute.' },
@@ -423,17 +404,6 @@ export function apply(ctx: Context, config: Config = {}): void {
         workdir: { type: 'string', description: 'Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.' },
         ...background ? {
           run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.' },
-        } : {},
-        ...escalationModes.length > 0 ? {
-          sandbox_permissions: {
-            type: 'string' as const,
-            enum: [...escalationModes],
-            description: 'The wider sandbox mode this command needs. Only valid as a one-shot retry of a command the sandbox just denied; requires justification and user approval.',
-          },
-          justification: {
-            type: 'string' as const,
-            description: 'Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access.',
-          },
         } : {},
       },
       /* jscpd:ignore-end */
@@ -516,12 +486,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       },
       /* jscpd:ignore-start -- the execute path mirrors dsh-tool-bash's by design (see the pwsh-tool-and-executor Agent Note). */
       async execute(args: PwshToolArgs, exec) {
-        validatePwshArgs(args)
+        const escalation = validatePwshArgs(args)
         // Description is display metadata; workdir defaults to the caller's session.
         const standingPolicy = resolveSandboxPolicy(exec)
-        const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
-          ? await approvePwshEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
-          : undefined
+        const approvedMode = escalation === undefined
+          ? undefined
+          : await approvePwshEscalation(escalation.sandboxPermissions, escalation.justification, exec, standingPolicy)
         const policy = approvedMode === undefined
           ? standingPolicy
           : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }

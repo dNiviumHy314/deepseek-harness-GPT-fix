@@ -1,0 +1,167 @@
+name: Check upstream compatibility
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+# The default mode is read-only: it validates and uploads a candidate patch.
+# Set the repository variable DSH_AUTO_SYNC=true only after branch protection and
+# review policy are configured. The optional PR job is the only job with write access.
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-compatibility
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/deepseek-ai/deepseek-harness.git
+  UPSTREAM_BRANCH: master
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.upstream.outputs.changed }}
+      head: ${{ steps.upstream.outputs.head }}
+    steps:
+      - name: Check out the public branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+
+      - name: Fetch upstream without importing runtime data
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          base="$(git merge-base HEAD "upstream/$UPSTREAM_BRANCH")"
+          upstream_head="$(git rev-parse "upstream/$UPSTREAM_BRANCH")"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$upstream_head" >> "$GITHUB_OUTPUT"
+          if [[ "$base" == "$upstream_head" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply the local fix to upstream
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary "${{ steps.upstream.outputs.base }}..HEAD" > "$RUNNER_TEMP/local-fix.patch"
+          git checkout --detach "upstream/$UPSTREAM_BRANCH"
+          git apply --3way --index "$RUNNER_TEMP/local-fix.patch"
+          git config user.name "deepseek-harness compatibility workflow"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Apply local permission fix to upstream candidate"
+
+      - name: Install candidate dependencies
+        if: steps.upstream.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Check public tree
+        if: steps.upstream.outputs.changed == 'true'
+        run: python tools/check-public-tree.py
+
+      - name: Run focused tests on the candidate
+        if: steps.upstream.outputs.changed == 'true'
+        run: >-
+          pnpm exec vitest run
+          packages/core/tools/tests/ptc.spec.ts
+          packages/sandbox/sandbox/tests/escalation.spec.ts
+          packages/shell/tool-bash/tests/tools.spec.ts
+          packages/shell/tool-pwsh/tests/tools.spec.ts
+          packages/fs/tool-fs/tests/tools.spec.ts
+          --reporter=dot
+
+      - name: Prepare candidate patch artifact
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff "upstream/$UPSTREAM_BRANCH..HEAD" > "$RUNNER_TEMP/upstream-candidate.patch"
+          {
+            echo "## Upstream compatibility candidate"
+            echo
+            echo "- Upstream: ${{ steps.upstream.outputs.head }}"
+            echo "- Local base: ${{ steps.upstream.outputs.base }}"
+            echo "- Focused tests: passed"
+            echo "- Personal runtime data: not read"
+            echo "- Remote branch mutation: not performed by this check job"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate patch
+        if: steps.upstream.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-candidate-${{ steps.upstream.outputs.head }}
+          path: |
+            ${{ runner.temp }}/upstream-candidate.patch
+            ${{ runner.temp }}/local-fix.patch
+          if-no-files-found: error
+
+  open-pr:
+    if: vars.DSH_AUTO_SYNC == 'true' && needs.sync-check.result == 'success' && needs.sync-check.outputs.changed == 'true'
+    needs: sync-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out the public branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download the tested patch
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-candidate-${{ needs.sync-check.outputs.head }}
+          path: candidate-artifact
+
+      - name: Apply the tested patch and open a PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          git checkout --detach "upstream/$UPSTREAM_BRANCH"
+          git apply --3way --index candidate-artifact/local-fix.patch
+          git config user.name "deepseek-harness compatibility workflow"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Apply local permission fix to upstream candidate"
+          branch="automation/upstream-${{ needs.sync-check.outputs.head }}"
+          git switch -C "$branch"
+          git push --force-with-lease origin "HEAD:$branch"
+          if [[ "$(gh pr list --head "$branch" --json number --jq 'length')" != "0" ]]; then
+            echo "A review PR already exists for $branch"
+            exit 0
+          fi
+          gh pr create \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "$branch" \
+            --title "Sync upstream ${{ needs.sync-check.outputs.head }}" \
+            --body "Automated candidate. Focused tests and public-hygiene checks passed in the read-only job. Review before merging."

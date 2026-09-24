@@ -869,7 +869,7 @@ describe('sandbox escalation API (write/edit)', () => {
     await expect(ctx.plugin(ToolFs)).rejects.toThrow('tool-fs: the mounted filesystem confines but ctx.sandboxPolicy is missing')
   })
 
-  it('advertises no escalation fields under a non-confining backend', async () => {
+  it('hides escalation fields under a non-confining backend', async () => {
     const { ctx } = await setup()
     expect(ctx.fs.sandboxMode).toBeUndefined()
     for (const name of ['write', 'edit'] as const) {
@@ -879,12 +879,12 @@ describe('sandbox escalation API (write/edit)', () => {
     }
   })
 
-  it('advertises the closed target vocabulary on write and edit under a confining backend', async () => {
+  it('hides escalation fields under a confining backend until a denial supplies a retry', async () => {
     const { ctx } = await setupConfining()
     for (const name of ['write', 'edit'] as const) {
       const props = fsSchema(ctx, name).parameters.properties
-      expect(props['sandbox_permissions']?.enum).toEqual(['workspace-write', 'danger-full-access'])
-      expect(props['justification']).toBeDefined()
+      expect(props['sandbox_permissions']).toBeUndefined()
+      expect(props['justification']).toBeUndefined()
     }
   })
 
@@ -979,11 +979,43 @@ describe('sandbox escalation API (write/edit)', () => {
     expect(text(result)).toContain('no agent to route it through')
   })
 
-  it('rejects the escalation argument pairing (one field without the other)', async () => {
-    const { ctx } = await setupConfining()
-    const missing = await call(ctx, 'write', { file_path: 'a.txt', content: 'x', sandbox_permissions: 'workspace-write' }, escalationAgent())
-    expect(missing.isError).toBe(true)
-    expect(text(missing)).toContain('sandbox_permissions requires a justification')
+  it('ignores malformed escalation fields and keeps the standing policy for write and edit', async () => {
+    const { ctx, fs } = await setupConfining()
+    const calls = [
+      ['write', { file_path: 'a.txt', content: 'x', sandbox_permissions: 'workspace-write' }],
+      ['write', { file_path: 'b.txt', content: 'x', justification: 'why' }],
+      ['write', { file_path: 'c.txt', content: 'x', sandbox_permissions: 'workspace-write', justification: ' ' }],
+      ['edit', { file_path: 'a.txt', old_string: 'x', new_string: 'y', sandbox_permissions: 'workspace-write' }],
+      ['edit', { file_path: 'b.txt', old_string: 'x', new_string: 'y', justification: 'why' }],
+      ['edit', { file_path: 'c.txt', old_string: 'x', new_string: 'y', sandbox_permissions: 'workspace-write', justification: ' ' }],
+    ] as const
+    const agent = escalationAgent()
+    for (const [name, args] of calls) {
+      if (name === 'edit') await call(ctx, 'read', { file_path: args.file_path }, agent)
+      const result = await call(ctx, name, args, agent)
+      expect(result.isError, `${name} ${JSON.stringify(args)}: ${text(result)}`).toBe(false)
+    }
+    expect(fs.stamped).toHaveLength(calls.length)
+    expect(fs.stamped.every(policy => policy?.mode === 'workspace-write')).toBe(true)
+  })
+
+  it('ignores a same-level escalation and keeps the standing policy without approval', async () => {
+    const { ctx, fs } = await setupConfining({ approval: true })
+    const prompted = vi.fn()
+    ctx.on('approval/request', () => { prompted(); return Promise.resolve('allowed-once' as const) })
+    fs.files.set('key:a.txt', 'x')
+    const agent = escalationAgent()
+    await call(ctx, 'read', { file_path: 'a.txt' }, agent)
+    const result = await call(ctx, 'edit', {
+      file_path: 'a.txt',
+      old_string: 'x',
+      new_string: 'y',
+      sandbox_permissions: 'workspace-write',
+      justification: 'already at this level',
+    }, agent)
+    expect(result.isError).toBe(false)
+    expect(prompted).not.toHaveBeenCalled()
+    expect(fs.stamped).toEqual([{ mode: 'workspace-write', workspaceRoot: '/session-project', sessionId: SessionId('sess-fs-esc') }])
   })
 
   it('sandbox_permissions under a non-confining backend fails closed (unadvertised field still reaches execute)', async () => {

@@ -30,15 +30,17 @@ describe('the strictly-wider ladder', () => {
 })
 
 describe('validateEscalationArgs', () => {
-  it('accepts neither field, or both with a non-empty justification', () => {
-    expect(() => { validateEscalationArgs(undefined, undefined) }).not.toThrow()
-    expect(() => { validateEscalationArgs('workspace-write', 'because the workspace needs it') }).not.toThrow()
+  it('accepts only a complete non-empty pair', () => {
+    expect(validateEscalationArgs(undefined, undefined)).toBe(false)
+    expect(validateEscalationArgs('workspace-write', 'because the workspace needs it')).toBe(true)
   })
 
-  it('rejects one field without the other, and a blank justification', () => {
-    expect(() => { validateEscalationArgs('workspace-write', undefined) }).toThrow(/requires a justification/)
-    expect(() => { validateEscalationArgs(undefined, 'orphan reason') }).toThrow(/only valid together with sandbox_permissions/)
-    expect(() => { validateEscalationArgs('workspace-write', '   ') }).toThrow(/non-empty sentence/)
+  it('ignores incomplete, blank, and non-string model fields', () => {
+    expect(validateEscalationArgs('workspace-write', undefined)).toBe(false)
+    expect(validateEscalationArgs(undefined, 'orphan reason')).toBe(false)
+    expect(validateEscalationArgs('workspace-write', '   ')).toBe(false)
+    expect(validateEscalationArgs(42, 'why')).toBe(false)
+    expect(validateEscalationArgs('workspace-write', { reason: 'why' })).toBe(false)
   })
 })
 
@@ -85,21 +87,21 @@ describe('approveEscalation', () => {
     const seen: unknown[] = []
     const request = req({ requestedMode: mode, effectiveMode: mode })
     await expect(approveEscalation(request, ingredients({ approver: approver('rejected', r => seen.push(r)) })))
-      .resolves.toBe(mode)
+      .resolves.toBeUndefined()
     expect(seen).toEqual([])
     await expect(approveEscalation(request, ingredients({ approver: undefined, agent: undefined })))
-      .resolves.toBe(mode)
+      .resolves.toBeUndefined()
   })
 
-  it('a narrower or unsupported target fails closed without asking', async () => {
+  it('a narrower or unsupported target is ignored without asking', async () => {
     const seen: unknown[] = []
     const spy = ingredients({ approver: approver('allowed-once', r => seen.push(r)) })
     await expect(approveEscalation(req({ requestedMode: 'read-only', effectiveMode: 'workspace-write' }), spy))
-      .rejects.toThrow(/not strictly wider than this call's current "workspace-write" mode/)
+      .resolves.toBeUndefined()
     await expect(approveEscalation(req({ requestedMode: 'workspace-write', effectiveMode: 'danger-full-access' as never }), spy))
-      .rejects.toThrow(/not strictly wider/)
+      .resolves.toBeUndefined()
     await expect(approveEscalation(req({ requestedMode: 'unknown-mode' }), spy))
-      .rejects.toThrow(/not strictly wider/)
+      .resolves.toBeUndefined()
     expect(seen).toEqual([])
   })
 

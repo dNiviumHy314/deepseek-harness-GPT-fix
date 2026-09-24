@@ -21,9 +21,8 @@ import type { SandboxMode } from './index.ts'
 
 /**
  * The strictly-wider table: what a call whose effective mode is the key may
- * escalate TO. Checked at EXECUTION, never baked into a tool schema — the
- * schema's enum is {@link ESCALATION_TARGETS}, because schemas are
- * registry-global while the effective mode is per-call truth.
+ * escalate to. Checked at execution because the effective mode is per-call
+ * state. The target vocabulary is retained for runtime validation only.
  */
 export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
   'read-only': ['workspace-write', 'danger-full-access'],
@@ -32,32 +31,34 @@ export const WIDER_MODES: Record<string, readonly SandboxMode[]> = {
 
 /**
  * The closed escalation-target vocabulary — every mode a call could ever
- * escalate TO (`read-only` is the floor; nothing escalates to it). Advertised
- * whenever the mounted capability confines: cutting the enum down to the modes
- * wider than the composition's DEFAULT would strand a session whose effective
- * mode sits below it (a `danger-full-access` default would advertise nothing
- * while a narrower-switched session stays confined with no lever).
+ * escalate to (`read-only` is the floor; nothing escalates to it). It is used
+ * for runtime validation and is deliberately absent from the initial schema.
+ * The runtime set is kept closed so a session whose effective mode sits below
+ * the composition default still has the full set of wider targets available.
  */
 export const ESCALATION_TARGETS: readonly SandboxMode[] = ['workspace-write', 'danger-full-access']
 
+const KNOWN_MODES: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
+
+/** Return a complete, non-empty escalation pair or ignore model input noise. */
+function usableEscalation(
+  sandboxPermissions: unknown,
+  justification: unknown,
+): { requestedMode: string; justification: string } | undefined {
+  if (typeof sandboxPermissions !== 'string' || sandboxPermissions.trim().length === 0) return undefined
+  if (typeof justification !== 'string' || justification.trim().length === 0) return undefined
+  return { requestedMode: sandboxPermissions, justification }
+}
+
 /**
- * Validate the escalation argument pairing a tool schema cannot express:
- * `sandbox_permissions` and `justification` travel together — an approval
- * prompt without a reason, or a reason driving nothing, is a malformed ask —
- * and the justification must be a non-empty sentence.
+ * Check the optional escalation pair. Malformed fields are treated as absent
+ * so the caller keeps its standing policy instead of failing the tool call.
  * @param sandboxPermissions - the raw `sandbox_permissions` argument, if given.
  * @param justification - the raw `justification` argument, if given.
+ * @returns `true` only when both fields form a usable escalation request.
  */
-export function validateEscalationArgs(sandboxPermissions: string | undefined, justification: string | undefined): void {
-  if (sandboxPermissions !== undefined && justification === undefined) {
-    throw new Error('invalid escalation: sandbox_permissions requires a justification')
-  }
-  if (justification !== undefined && sandboxPermissions === undefined) {
-    throw new Error('invalid escalation: justification is only valid together with sandbox_permissions')
-  }
-  if (justification !== undefined && justification.trim().length === 0) {
-    throw new Error('invalid justification: expected a non-empty sentence')
-  }
+export function validateEscalationArgs(sandboxPermissions: unknown, justification: unknown): boolean {
+  return usableEscalation(sandboxPermissions, justification) !== undefined
 }
 
 /**
@@ -73,8 +74,8 @@ export function sandboxDenialMarker(mode: SandboxMode): string {
 }
 
 /**
- * The same-turn escalation hint that rides a denial when the composition
- * advertises the escalation fields — the nudge lives at the decision point so
+ * The same-turn escalation hint that rides a denial when a wider retry is
+ * available — the nudge lives at the decision point so
  * the sanctioned retry does not depend on the model recalling the tool
  * description.
  * @param subject - the family's noun for the denied action (`command` for
@@ -130,10 +131,10 @@ export interface EscalationApproval<A = object, C = string> {
 
 /** One escalation request, as {@link approveEscalation} judges it. */
 export interface EscalationRequest {
-  /** The requested target mode (schema-pinned to {@link ESCALATION_TARGETS} when advertised). */
-  requestedMode: string
+  /** The requested target mode, validated against the runtime vocabulary. */
+  requestedMode?: unknown
   /** The model's one-sentence reason, shown verbatim to the user inside the audit reason. */
-  justification: string
+  justification?: unknown
   /** The call's effective mode (session override ?? composition default); repeating it needs no approval. */
   effectiveMode: SandboxMode
   /** The family's noun for the escalated action in user-facing texts (`command` for bash, `operation` for fs). */
@@ -150,23 +151,26 @@ export interface EscalationRequest {
  * @param approval - the approval ingredients the tool holds (see {@link EscalationApproval}).
  * @returns the granted mode, consumed by the one call that asked.
  */
-export async function approveEscalation<A, C>(request: EscalationRequest, approval: EscalationApproval<A, C>): Promise<SandboxMode> {
-  const { requestedMode: mode, effectiveMode, justification, subject } = request
-  if (mode === effectiveMode) return effectiveMode
-  // Strict widening is an EXECUTION check against the call's effective mode —
-  // deliberately not a schema constraint (the enum is the closed target
-  // vocabulary; the effective mode is per-call truth).
-  if (!(WIDER_MODES[effectiveMode] ?? []).includes(mode as SandboxMode)) {
+export async function approveEscalation<A, C>(
+  request: EscalationRequest,
+  approval: EscalationApproval<A, C>,
+): Promise<SandboxMode | undefined> {
+  const { requestedMode: rawMode, effectiveMode, justification: rawJustification, subject } = request
+  const usable = usableEscalation(rawMode, rawJustification)
+  if (usable === undefined) return undefined
+  const { requestedMode: mode, justification } = usable
+  // An invalid effective mode is a corrupt policy state and remains fail-closed.
+  if (!KNOWN_MODES.includes(effectiveMode)) {
     throw new Error(`sandbox escalation to "${mode}" is not strictly wider than this call's current "${effectiveMode}" mode`)
   }
+  // Same-level and narrower requests do not need approval and do not fail the call.
+  if (!(WIDER_MODES[effectiveMode] ?? []).includes(mode as SandboxMode)) return undefined
   if (approval.approver === undefined) {
     throw new Error(`sandbox escalation to "${mode}" requires approval, but no approval service is composed`)
   }
   if (approval.agent === undefined) {
     throw new Error(`sandbox escalation to "${mode}" requires approval, but the call has no agent to route it through`)
   }
-  // Self-contained for the audit trail: approval/asked stores this reason,
-  // and the target mode is part of the grant's identity.
   const outcome = await approval.approver.request({
     agent: approval.agent,
     toolName: approval.toolName,
@@ -175,8 +179,6 @@ export async function approveEscalation<A, C>(request: EscalationRequest, approv
     ...approval.signal ? { signal: approval.signal } : {},
   })
   switch (outcome) {
-    // The schema enum already pinned `mode` to the closed target vocabulary;
-    // the check above proved it is strictly wider.
     case 'allowed-once': return mode as SandboxMode
     case 'rejected': throw new Error(`the user rejected escalating this ${subject} to "${mode}"`)
     case 'cancelled': throw new Error(`approval for escalating to "${mode}" was cancelled`)
